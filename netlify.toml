@@ -1,0 +1,22 @@
+# Netlify build + SPA routing for Candor (candorhsa.com)
+
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+# Single-page-app fallback: every path serves index.html so React Router
+# can handle client-side routes (e.g. /store, /vault) on hard refresh / deep links.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# Baseline security headers. Tighten the CSP before public launch with counsel/security review —
+# this is sensitive health + financial data.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "geolocation=(), microphone=(), camera=()"
