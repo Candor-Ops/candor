@@ -18,6 +18,9 @@ export default defineConfig(({ mode }) => {
             org: env.SENTRY_ORG,            // e.g. "candor"
             project: env.SENTRY_PROJECT,    // e.g. "candor-web"
             authToken: env.SENTRY_AUTH_TOKEN,
+            // Upload source maps to Sentry, then delete them from the build
+            // output so they are never served publicly on candorhsa.com.
+            sourcemaps: { filesToDeleteAfterUpload: ['./dist/**/*.map'] },
           })
         : undefined,
     ],
