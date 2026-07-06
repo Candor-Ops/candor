@@ -8,13 +8,17 @@ import { ReceiptIcon, CloseIcon, CheckIcon, ClockIcon } from "./icons.jsx";
  *
  * @param {Object} props
  * @param {{load:(userId:string)=>Promise<any[]>, save:(userId:string, list:any[])=>Promise<void>}} props.storageAdapter
- *        Persistence backend. localStorage in the MVP; Supabase (same shape) in Week 2.
- * @param {string} [props.userId]   Owner key. 'demo-user' until real auth (Week 2).
+ *        Persistence backend. Supabase in Week 2; localStorage remains the fallback.
+ * @param {string} [props.userId]   Owner key (Supabase user UUID).
  * @param {Object} [props.prefill]  Optional receipt fields to pre-open the capture
  *        form with — used by checkout auto-capture in Week 3.
  *
  * GUARDRAIL: the capture form stores card brand + last 4 digits ONLY. It never
  * accepts or stores a full card number, expiry, or CVV.
+ *
+ * MONEY MODEL: "Total paid" is the load-bearing, required number — what the
+ * user actually paid out of pocket AFTER discounts (that's the IRS-reimbursable
+ * amount). Subtotal / discount / tax are optional context that suggest the total.
  */
 
 const CATEGORIES = [
@@ -34,11 +38,36 @@ const CARD_BRANDS = ["Visa", "Mastercard", "Amex", "Discover", "HSA debit", "Oth
 const usd = (n) =>
   (Number(n) || 0).toLocaleString("en-US", { style: "currency", currency: "USD" });
 
+// Forgiving money parser: accepts "$1,234.50", "12,50", " 15 ", etc.
+// Returns a number, or null when the field is empty/unparseable.
+export function parseMoney(v) {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  if (!s) return null;
+  const cleaned = s.replace(/[$\s]/g, "").replace(/,/g, (m, i, str) =>
+    // "1,234.56" thousands → drop; "12,50" decimal comma → dot
+    str.includes(".") ? "" : str.indexOf(",") === str.length - 3 ? "." : ""
+  );
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : null;
+}
+
+// Suggested total = subtotal − discount + tax (only when at least one part is set).
+function suggestedTotal(form) {
+  const sub = parseMoney(form.subtotal);
+  const disc = parseMoney(form.discount);
+  const tax = parseMoney(form.tax);
+  if (sub === null && disc === null && tax === null) return null;
+  const n = (sub ?? 0) - (disc ?? 0) + (tax ?? 0);
+  return n >= 0 ? Math.round(n * 100) / 100 : null;
+}
+
 const blankForm = {
   product: "",
   merchant: "",
   date: new Date().toISOString().slice(0, 10),
   subtotal: "",
+  discount: "",
   tax: "",
   total: "",
   category: "OTC",
@@ -47,7 +76,8 @@ const blankForm = {
   cardLast4: "",
   hsaOpenAtTime: true,
   notes: "",
-  photo: null, // small data URL thumbnail
+  photo: null, // data URL (fresh) or signed URL (loaded from server)
+  photoPath: null, // Storage object path — round-trips through the adapter
 };
 
 // Downscale a chosen photo to a small thumbnail before storing (honors the
@@ -74,12 +104,34 @@ function downscaleImage(file, maxDim = 700, quality = 0.6) {
   });
 }
 
+const MAX_PDF_BYTES = 5 * 1024 * 1024; // 5 MB cap for PDF attachments
+
+function fileToDataUrl(file) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(file);
+  });
+}
+
+// Attachment type helper — works for fresh data URLs and loaded photoPaths.
+export function isPdfAttachment(r) {
+  return (
+    (typeof r.photoPath === "string" && r.photoPath.endsWith(".pdf")) ||
+    (typeof r.photo === "string" && r.photo.startsWith("data:application/pdf"))
+  );
+}
+
 export default function ReceiptVault({ storageAdapter, userId = "demo-user", prefill }) {
   const [receipts, setReceipts] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [showForm, setShowForm] = useState(Boolean(prefill));
   const [filter, setFilter] = useState("all"); // all | deferred | reimbursed
   const [form, setForm] = useState({ ...blankForm, ...(prefill || {}) });
+  const [editingId, setEditingId] = useState(null);
+  const [totalTouched, setTotalTouched] = useState(false);
+  const [photoError, setPhotoError] = useState(null);
 
   // Load persisted receipts on mount.
   useEffect(() => {
@@ -103,11 +155,26 @@ export default function ReceiptVault({ storageAdapter, userId = "demo-user", pre
 
   const setField = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
+  // Auto-suggest the total while the user hasn't typed in the Total field.
+  useEffect(() => {
+    if (totalTouched) return;
+    const s = suggestedTotal(form);
+    if (s !== null && String(s) !== String(form.total)) {
+      setForm((f) => ({ ...f, total: String(s) }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.subtotal, form.discount, form.tax, totalTouched]);
+
   // Deferred (reimbursable) balance: out-of-pocket, HSA-open-at-time, not yet reimbursed.
   const deferred = useMemo(
     () =>
       receipts
-        .filter((r) => r.paySource === "out-of-pocket" && r.hsaOpenAtTime && r.status !== "reimbursed")
+        .filter(
+          (r) =>
+            r.paySource === "out-of-pocket" &&
+            r.hsaOpenAtTime &&
+            r.status !== "reimbursed"
+        )
         .reduce((sum, r) => sum + (Number(r.total) || 0), 0),
     [receipts]
   );
@@ -127,24 +194,85 @@ export default function ReceiptVault({ storageAdapter, userId = "demo-user", pre
   }, [receipts, filter]);
 
   const onPhoto = useCallback(async (file) => {
+    setPhotoError(null);
     if (!file) return setField("photo", null);
+    if (file.type === "application/pdf") {
+      if (file.size > MAX_PDF_BYTES) {
+        setPhotoError("That PDF is over 5 MB — try a smaller export or a photo instead.");
+        return;
+      }
+      const dataUrl = await fileToDataUrl(file);
+      setField("photo", dataUrl);
+      return;
+    }
     const thumb = await downscaleImage(file);
     setField("photo", thumb);
   }, []);
 
-  function addReceipt(e) {
-    e.preventDefault();
-    const total = Number(form.total) || Number(form.subtotal) + Number(form.tax) || 0;
-    const receipt = {
-      ...form,
-      id: `r_${Date.now()}`,
-      total,
-      cardLast4: (form.cardLast4 || "").replace(/\D/g, "").slice(0, 4),
-      status: form.paySource === "hsa-card" ? "paid-from-hsa" : "deferred",
-      createdAt: new Date().toISOString(),
-    };
-    setReceipts((list) => [receipt, ...list]);
+  function openAdd() {
     setForm({ ...blankForm });
+    setEditingId(null);
+    setTotalTouched(false);
+    setPhotoError(null);
+    setShowForm(true);
+  }
+
+  function openEdit(r) {
+    setForm({
+      ...blankForm,
+      ...r,
+      subtotal: r.subtotal ?? "",
+      discount: r.discount ?? "",
+      tax: r.tax ?? "",
+      total: r.total ?? "",
+    });
+    setEditingId(r.id);
+    setTotalTouched(true); // editing: don't clobber the saved total with suggestions
+    setPhotoError(null);
+    setShowForm(true);
+  }
+
+  function submitReceipt(e) {
+    e.preventDefault();
+    const total = parseMoney(form.total) ?? suggestedTotal(form);
+    if (total === null || total < 0) return; // input is required; belt and suspenders
+
+    const base = {
+      ...form,
+      total,
+      subtotal: parseMoney(form.subtotal) ?? "",
+      discount: parseMoney(form.discount) ?? "",
+      tax: parseMoney(form.tax) ?? "",
+      cardLast4: (form.cardLast4 || "").replace(/\D/g, "").slice(0, 4),
+    };
+
+    if (editingId) {
+      setReceipts((list) =>
+        list.map((r) => {
+          if (r.id !== editingId) return r;
+          // Preserve reimbursed status unless the pay source changed.
+          const status =
+            base.paySource === "hsa-card"
+              ? "paid-from-hsa"
+              : r.status === "reimbursed"
+                ? "reimbursed"
+                : "deferred";
+          return { ...r, ...base, id: r.id, createdAt: r.createdAt, status };
+        })
+      );
+    } else {
+      const receipt = {
+        ...base,
+        id: `r_${Date.now()}`,
+        status: form.paySource === "hsa-card" ? "paid-from-hsa" : "deferred",
+        createdAt: new Date().toISOString(),
+      };
+      setReceipts((list) => [receipt, ...list]);
+    }
+
+    setForm({ ...blankForm });
+    setEditingId(null);
+    setTotalTouched(false);
     setShowForm(false);
   }
 
@@ -184,7 +312,7 @@ export default function ReceiptVault({ storageAdapter, userId = "demo-user", pre
           <Stat label="Reimbursed" value={usd(reimbursedTotal)} />
           <div className="flex items-center justify-center p-4">
             <button
-              onClick={() => setShowForm(true)}
+              onClick={openAdd}
               className="candor-gradient w-full rounded-xl px-3 py-2.5 text-sm font-semibold text-white shadow-sm"
             >
               Add a receipt
@@ -224,7 +352,13 @@ export default function ReceiptVault({ storageAdapter, userId = "demo-user", pre
           </EmptyState>
         ) : (
           visible.map((r) => (
-            <ReceiptRow key={r.id} r={r} onToggle={toggleReimbursed} onRemove={remove} />
+            <ReceiptRow
+              key={r.id}
+              r={r}
+              onToggle={toggleReimbursed}
+              onRemove={remove}
+              onEdit={openEdit}
+            />
           ))
         )}
       </div>
@@ -234,8 +368,15 @@ export default function ReceiptVault({ storageAdapter, userId = "demo-user", pre
           form={form}
           setField={setField}
           onPhoto={onPhoto}
-          onSubmit={addReceipt}
-          onClose={() => setShowForm(false)}
+          onSubmit={submitReceipt}
+          onClose={() => {
+            setShowForm(false);
+            setEditingId(null);
+            setTotalTouched(false);
+          }}
+          onTotalTouched={() => setTotalTouched(true)}
+          editing={Boolean(editingId)}
+          photoError={photoError}
         />
       )}
     </div>
@@ -260,16 +401,42 @@ function EmptyState({ children }) {
   );
 }
 
-function ReceiptRow({ r, onToggle, onRemove }) {
+function AttachmentBadge({ r }) {
+  if (!r.photo) return null;
+  const pdf = isPdfAttachment(r);
+  const canOpen = typeof r.photo === "string" && r.photo.startsWith("http");
+  const chip = (
+    <span className="inline-flex items-center gap-1 rounded-md bg-stone-100 px-1.5 py-0.5 text-[10px] font-medium text-stone-500 ring-1 ring-inset ring-stone-200">
+      {pdf ? "PDF" : "IMG"}
+    </span>
+  );
+  // Signed URLs open in a new tab; fresh data URLs can't (browser-blocked) —
+  // they become openable after the next vault load.
+  return canOpen ? (
+    <a href={r.photo} target="_blank" rel="noreferrer" title="Open receipt attachment">
+      {chip}
+    </a>
+  ) : (
+    chip
+  );
+}
+
+function ReceiptRow({ r, onToggle, onRemove, onEdit }) {
   const reimbursed = r.status === "reimbursed";
   const fromHsa = r.paySource === "hsa-card";
   return (
     <div className="flex items-center gap-4 rounded-2xl border border-stone-200 bg-white p-4 shadow-sm">
-      <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-stone-50 text-stone-400">
-        <ReceiptIcon className="h-5 w-5" />
+      <div className="grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-xl bg-stone-50 text-stone-400">
+        {r.photo && !isPdfAttachment(r) ? (
+          <img src={r.photo} alt="" className="h-full w-full object-cover" />
+        ) : (
+          <ReceiptIcon className="h-5 w-5" />
+        )}
       </div>
       <div className="min-w-0 flex-1">
-        <p className="truncate font-medium text-stone-950">{r.product || "Untitled receipt"}</p>
+        <p className="truncate font-medium text-stone-950">
+          {r.product || "Untitled receipt"} <AttachmentBadge r={r} />
+        </p>
         <p className="truncate text-sm text-stone-500">
           {[r.merchant, r.category, r.date].filter(Boolean).join(" · ")}
           {r.cardLast4 ? ` · ${r.cardBrand} ••${r.cardLast4}` : ""}
@@ -309,6 +476,12 @@ function ReceiptRow({ r, onToggle, onRemove }) {
           </button>
         )}
         <button
+          onClick={() => onEdit(r)}
+          className="rounded-lg border border-stone-200 px-2.5 py-1 text-xs font-medium text-stone-600 hover:bg-stone-50"
+        >
+          Edit
+        </button>
+        <button
           onClick={() => onRemove(r.id)}
           aria-label="Delete receipt"
           className="rounded-lg border border-stone-200 px-2.5 py-1 text-xs font-medium text-stone-400 hover:bg-stone-50 hover:text-stone-600"
@@ -320,7 +493,17 @@ function ReceiptRow({ r, onToggle, onRemove }) {
   );
 }
 
-function CaptureForm({ form, setField, onPhoto, onSubmit, onClose }) {
+function CaptureForm({
+  form,
+  setField,
+  onPhoto,
+  onSubmit,
+  onClose,
+  onTotalTouched,
+  editing,
+  photoError,
+}) {
+  const formPdf = isPdfAttachment(form);
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-stone-950/40 p-0 sm:items-center sm:p-4">
       <form
@@ -328,7 +511,9 @@ function CaptureForm({ form, setField, onPhoto, onSubmit, onClose }) {
         className="max-h-[92dvh] w-full max-w-lg overflow-y-auto rounded-t-2xl bg-white p-6 shadow-xl sm:rounded-2xl"
       >
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="font-display text-xl font-700 text-stone-950">Add a receipt</h2>
+          <h2 className="font-display text-xl font-700 text-stone-950">
+            {editing ? "Edit receipt" : "Add a receipt"}
+          </h2>
           <button
             type="button"
             onClick={onClose}
@@ -379,6 +564,15 @@ function CaptureForm({ form, setField, onPhoto, onSubmit, onClose }) {
                 placeholder="0.00"
               />
             </Field>
+            <Field label="Discount">
+              <input
+                inputMode="decimal"
+                value={form.discount}
+                onChange={(e) => setField("discount", e.target.value)}
+                className={inputCls}
+                placeholder="0.00"
+              />
+            </Field>
             <Field label="Tax">
               <input
                 inputMode="decimal"
@@ -388,16 +582,26 @@ function CaptureForm({ form, setField, onPhoto, onSubmit, onClose }) {
                 placeholder="0.00"
               />
             </Field>
-            <Field label="Total">
-              <input
-                inputMode="decimal"
-                value={form.total}
-                onChange={(e) => setField("total", e.target.value)}
-                className={inputCls}
-                placeholder="0.00"
-              />
-            </Field>
           </div>
+
+          <Field label="Total paid — after discounts">
+            <input
+              required
+              inputMode="decimal"
+              value={form.total}
+              onChange={(e) => {
+                onTotalTouched();
+                setField("total", e.target.value);
+              }}
+              className={inputCls}
+              placeholder="0.00"
+              aria-describedby="total-help"
+            />
+          </Field>
+          <p id="total-help" className="-mt-2 text-xs text-stone-400">
+            What actually left your pocket — this is the amount you can reimburse.
+            We'll suggest it from subtotal − discount + tax.
+          </p>
 
           <div className="grid grid-cols-2 gap-3">
             <Field label="Category">
@@ -440,7 +644,9 @@ function CaptureForm({ form, setField, onPhoto, onSubmit, onClose }) {
                 inputMode="numeric"
                 maxLength={4}
                 value={form.cardLast4}
-                onChange={(e) => setField("cardLast4", e.target.value.replace(/\D/g, "").slice(0, 4))}
+                onChange={(e) =>
+                  setField("cardLast4", e.target.value.replace(/\D/g, "").slice(0, 4))
+                }
                 className={inputCls}
                 placeholder="1234"
                 aria-describedby="card-help"
@@ -461,14 +667,20 @@ function CaptureForm({ form, setField, onPhoto, onSubmit, onClose }) {
             My HSA was open when I paid this
           </label>
 
-          <Field label="Receipt photo (optional)">
+          <Field label="Receipt photo or PDF (optional)">
             <input
               type="file"
-              accept="image/*"
+              accept="image/*,application/pdf"
               onChange={(e) => onPhoto(e.target.files?.[0])}
               className="block w-full text-sm text-stone-500 file:mr-3 file:rounded-lg file:border-0 file:bg-stone-100 file:px-3 file:py-2 file:text-sm file:font-medium file:text-stone-700"
             />
-            {form.photo && (
+            {photoError && <p className="mt-2 text-xs text-red-600">{photoError}</p>}
+            {form.photo && formPdf && (
+              <p className="mt-2 inline-flex items-center gap-2 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-medium text-stone-600">
+                <ReceiptIcon className="h-4 w-4 text-stone-400" /> PDF attached
+              </p>
+            )}
+            {form.photo && !formPdf && (
               <img
                 src={form.photo}
                 alt="Receipt preview"
@@ -500,7 +712,7 @@ function CaptureForm({ form, setField, onPhoto, onSubmit, onClose }) {
             type="submit"
             className="candor-gradient flex-1 rounded-xl px-4 py-2.5 text-sm font-semibold text-white shadow-sm"
           >
-            Save to vault
+            {editing ? "Save changes" : "Save to vault"}
           </button>
         </div>
       </form>

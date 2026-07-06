@@ -26,6 +26,11 @@ import { supabase } from "./supabaseClient.js";
 const BUCKET = "receipt-photos";
 const SIGNED_URL_TTL = 60 * 60; // 1 hour — vault reloads re-sign on mount
 
+// SAFETY LATCH: if load() ever fails, the component ends up holding an empty
+// list — and its whole-list save() would then delete every server row. save()
+// is a no-op until a load has succeeded in this session.
+let loadSucceeded = false;
+
 const numOrNull = (v) => {
   const n = Number(v);
   return v === "" || v === null || v === undefined || Number.isNaN(n) ? null : n;
@@ -39,6 +44,7 @@ function toClient(row, signedUrl) {
     date: row.date ?? "",
     subtotal: row.subtotal ?? "",
     tax: row.tax ?? "",
+    discount: row.discount ?? "",
     total: Number(row.total) || 0,
     category: row.category ?? "Other",
     paySource: row.pay_source ?? "out-of-pocket",
@@ -61,6 +67,7 @@ function toRow(userId, r) {
     merchant: r.merchant || null,
     date: r.date || null,
     subtotal: numOrNull(r.subtotal),
+    discount: numOrNull(r.discount),
     tax: numOrNull(r.tax),
     total: numOrNull(r.total) ?? 0,
     category: r.category || null,
@@ -107,29 +114,35 @@ export const supabaseAdapter = {
         }
       }
 
+      loadSucceeded = true;
       return rows.map((row) => toClient(row, urlByPath.get(row.photo_path)));
     } catch (err) {
       Sentry.captureException(err);
       console.error("[supabaseAdapter] load failed:", err);
+      loadSucceeded = false;
       return [];
     }
   },
 
   async save(userId, list) {
-    if (!supabase) return;
+    if (!supabase || !loadSucceeded) return;
     try {
       const receipts = Array.isArray(list) ? list : [];
 
-      // 1. Upload any NEW photos (still data URLs). Photos loaded from the
-      //    server are signed https URLs and are skipped — no re-upload loop.
+      // 1. Upload any NEW attachments (still data URLs) — JPEG thumbnails or
+      //    PDFs. Attachments loaded from the server are signed https URLs and
+      //    are skipped — no re-upload loop.
       const prepared = await Promise.all(
         receipts.map(async (r) => {
           if (typeof r.photo === "string" && r.photo.startsWith("data:")) {
-            const path = `${userId}/${r.id}.jpg`;
+            const isPdf = r.photo.startsWith("data:application/pdf");
+            const ext = isPdf ? "pdf" : "jpg";
+            const contentType = isPdf ? "application/pdf" : "image/jpeg";
+            const path = `${userId}/${r.id}.${ext}`;
             const blob = await dataUrlToBlob(r.photo);
             const { error } = await supabase.storage
               .from(BUCKET)
-              .upload(path, blob, { contentType: "image/jpeg", upsert: true });
+              .upload(path, blob, { contentType, upsert: true });
             if (error) {
               Sentry.captureException(error);
               return r; // keep receipt; photo just won't persist server-side
