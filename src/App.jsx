@@ -6,16 +6,41 @@ import Vault from "./pages/Vault.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import Tax from "./pages/Tax.jsx";
 import Account from "./pages/Account.jsx";
+import { RequireAuth } from "./lib/AuthContext.jsx";
 
+// `/` and `/store` stay public — they're the top-of-funnel.
+// `/vault`, `/dashboard`, `/tax` hold user data → protected.
+// `/account` self-manages (it IS the sign-in surface).
 export default function App() {
   return (
     <Routes>
       <Route element={<Layout />}>
         <Route path="/" element={<Landing />} />
         <Route path="/store" element={<Store />} />
-        <Route path="/vault" element={<Vault />} />
-        <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="/tax" element={<Tax />} />
+        <Route
+          path="/vault"
+          element={
+            <RequireAuth>
+              <Vault />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/dashboard"
+          element={
+            <RequireAuth>
+              <Dashboard />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/tax"
+          element={
+            <RequireAuth>
+              <Tax />
+            </RequireAuth>
+          }
+        />
         <Route path="/account" element={<Account />} />
         <Route path="*" element={<Landing />} />
       </Route>

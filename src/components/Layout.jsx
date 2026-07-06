@@ -7,6 +7,7 @@ import {
   AccountIcon,
   CheckIcon,
 } from "./icons.jsx";
+import { useAuth } from "../lib/AuthContext.jsx";
 
 /** Candor wordmark: a "verified" stamp mark + the name in Space Grotesk. */
 export function Wordmark({ className = "" }) {
@@ -33,6 +34,7 @@ const TABS = [
 export default function Layout() {
   const { pathname } = useLocation();
   const isLanding = pathname === "/";
+  const { user, loading, signOut } = useAuth();
 
   return (
     <div className="min-h-dvh bg-white text-stone-950">
@@ -62,12 +64,33 @@ export default function Layout() {
             ))}
           </div>
 
-          <Link
-            to="/"
-            className="candor-gradient hidden rounded-xl px-4 py-2 text-sm font-semibold text-white shadow-sm transition-transform hover:scale-[1.02] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-candor-red sm:inline-flex"
-          >
-            {isLanding ? "Get early access" : "Waitlist"}
-          </Link>
+          {/* Auth affordance: Sign in when signed out; account + sign out when in. */}
+          {user ? (
+            <div className="hidden items-center gap-2 sm:flex">
+              <Link
+                to="/account"
+                className="max-w-[180px] truncate rounded-lg px-2 py-1.5 text-sm font-medium text-stone-500 hover:text-stone-950"
+                title={user.email}
+              >
+                {user.email}
+              </Link>
+              <button
+                onClick={signOut}
+                className="rounded-xl border border-stone-200 px-3.5 py-2 text-sm font-semibold text-stone-700 hover:bg-stone-50"
+              >
+                Sign out
+              </button>
+            </div>
+          ) : (
+            <Link
+              to={isLanding ? "/" : "/account"}
+              className={`candor-gradient hidden rounded-xl px-4 py-2 text-sm font-semibold text-white shadow-sm transition-transform hover:scale-[1.02] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-candor-red sm:inline-flex ${
+                loading ? "invisible" : ""
+              }`}
+            >
+              {isLanding ? "Get early access" : "Sign in"}
+            </Link>
+          )}
         </nav>
       </header>
 

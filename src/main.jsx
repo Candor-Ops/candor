@@ -7,13 +7,16 @@ import * as Sentry from "@sentry/react";
 import { BrowserRouter } from "react-router-dom";
 import App from "./App.jsx";
 import { ErrorFallback } from "./components/Layout.jsx";
+import { AuthProvider } from "./lib/AuthContext.jsx";
 import "./index.css";
 
 createRoot(document.getElementById("root")).render(
   <StrictMode>
     <Sentry.ErrorBoundary fallback={<ErrorFallback />} showDialog={false}>
       <BrowserRouter>
-        <App />
+        <AuthProvider>
+          <App />
+        </AuthProvider>
       </BrowserRouter>
     </Sentry.ErrorBoundary>
   </StrictMode>
