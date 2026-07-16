@@ -88,6 +88,74 @@ async function dataUrlToBlob(dataUrl) {
   return res.blob();
 }
 
+// Errors that usually mean "the session token went stale" (e.g. laptop slept
+// past the JWT expiry): RLS rejects the write (42501) or PostgREST returns
+// 401/PGRST301. A session refresh + one retry recovers these.
+function isAuthStale(err) {
+  return (
+    err?.code === "42501" ||
+    err?.code === "PGRST301" ||
+    err?.status === 401
+  );
+}
+
+async function reconcileSave(userId, list) {
+  const receipts = Array.isArray(list) ? list : [];
+
+  // 1. Upload any NEW attachments (still data URLs) — JPEG thumbnails or
+  //    PDFs. Attachments loaded from the server are signed https URLs and
+  //    are skipped — no re-upload loop.
+  const prepared = await Promise.all(
+    receipts.map(async (r) => {
+      if (typeof r.photo === "string" && r.photo.startsWith("data:")) {
+        const isPdf = r.photo.startsWith("data:application/pdf");
+        const ext = isPdf ? "pdf" : "jpg";
+        const contentType = isPdf ? "application/pdf" : "image/jpeg";
+        const path = `${userId}/${r.id}.${ext}`;
+        const blob = await dataUrlToBlob(r.photo);
+        const { error } = await supabase.storage
+          .from(BUCKET)
+          .upload(path, blob, { contentType, upsert: true });
+        if (error) {
+          Sentry.captureException(error);
+          return r; // keep receipt; photo just won't persist server-side
+        }
+        return { ...r, photoPath: path };
+      }
+      return r;
+    })
+  );
+
+  // 2. Upsert everything present (reconcile, don't blindly clobber).
+  if (prepared.length) {
+    const { error } = await supabase
+      .from("receipts")
+      .upsert(prepared.map((r) => toRow(userId, r)));
+    if (error) throw error;
+  }
+
+  // 3. Delete rows (and their photos) no longer in the list.
+  const keep = new Set(prepared.map((r) => r.id));
+  const { data: existing, error: readErr } = await supabase
+    .from("receipts")
+    .select("id, photo_path");
+  if (readErr) throw readErr;
+
+  const stale = (existing ?? []).filter((row) => !keep.has(row.id));
+  if (stale.length) {
+    const { error: delErr } = await supabase
+      .from("receipts")
+      .delete()
+      .in("id", stale.map((row) => row.id));
+    if (delErr) throw delErr;
+
+    const stalePhotos = stale.map((row) => row.photo_path).filter(Boolean);
+    if (stalePhotos.length) {
+      await supabase.storage.from(BUCKET).remove(stalePhotos);
+    }
+  }
+}
+
 export const supabaseAdapter = {
   async load(userId) {
     if (!supabase) return [];
@@ -127,61 +195,20 @@ export const supabaseAdapter = {
   async save(userId, list) {
     if (!supabase || !loadSucceeded) return;
     try {
-      const receipts = Array.isArray(list) ? list : [];
-
-      // 1. Upload any NEW attachments (still data URLs) — JPEG thumbnails or
-      //    PDFs. Attachments loaded from the server are signed https URLs and
-      //    are skipped — no re-upload loop.
-      const prepared = await Promise.all(
-        receipts.map(async (r) => {
-          if (typeof r.photo === "string" && r.photo.startsWith("data:")) {
-            const isPdf = r.photo.startsWith("data:application/pdf");
-            const ext = isPdf ? "pdf" : "jpg";
-            const contentType = isPdf ? "application/pdf" : "image/jpeg";
-            const path = `${userId}/${r.id}.${ext}`;
-            const blob = await dataUrlToBlob(r.photo);
-            const { error } = await supabase.storage
-              .from(BUCKET)
-              .upload(path, blob, { contentType, upsert: true });
-            if (error) {
-              Sentry.captureException(error);
-              return r; // keep receipt; photo just won't persist server-side
-            }
-            return { ...r, photoPath: path };
-          }
-          return r;
-        })
-      );
-
-      // 2. Upsert everything present (reconcile, don't blindly clobber).
-      if (prepared.length) {
-        const { error } = await supabase
-          .from("receipts")
-          .upsert(prepared.map((r) => toRow(userId, r)));
-        if (error) throw error;
-      }
-
-      // 3. Delete rows (and their photos) no longer in the list.
-      const keep = new Set(prepared.map((r) => r.id));
-      const { data: existing, error: readErr } = await supabase
-        .from("receipts")
-        .select("id, photo_path");
-      if (readErr) throw readErr;
-
-      const stale = (existing ?? []).filter((row) => !keep.has(row.id));
-      if (stale.length) {
-        const { error: delErr } = await supabase
-          .from("receipts")
-          .delete()
-          .in("id", stale.map((row) => row.id));
-        if (delErr) throw delErr;
-
-        const stalePhotos = stale.map((row) => row.photo_path).filter(Boolean);
-        if (stalePhotos.length) {
-          await supabase.storage.from(BUCKET).remove(stalePhotos);
+      await reconcileSave(userId, list);
+    } catch (err) {
+      // Stale session? Refresh once and retry before reporting.
+      if (isAuthStale(err)) {
+        try {
+          await supabase.auth.refreshSession();
+          await reconcileSave(userId, list);
+          return;
+        } catch (retryErr) {
+          Sentry.captureException(retryErr);
+          console.error("[supabaseAdapter] save failed after refresh:", retryErr);
+          return;
         }
       }
-    } catch (err) {
       Sentry.captureException(err);
       console.error("[supabaseAdapter] save failed:", err);
     }

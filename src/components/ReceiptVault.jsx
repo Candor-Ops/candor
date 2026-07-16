@@ -123,7 +123,12 @@ export function isPdfAttachment(r) {
   );
 }
 
-export default function ReceiptVault({ storageAdapter, userId = "demo-user", prefill }) {
+export default function ReceiptVault({
+  storageAdapter,
+  userId = "demo-user",
+  prefill,
+  hsaEstablishedDate = null, // "YYYY-MM-DD" from the user's profile (or null)
+}) {
   const [receipts, setReceipts] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [showForm, setShowForm] = useState(Boolean(prefill));
@@ -131,7 +136,16 @@ export default function ReceiptVault({ storageAdapter, userId = "demo-user", pre
   const [form, setForm] = useState({ ...blankForm, ...(prefill || {}) });
   const [editingId, setEditingId] = useState(null);
   const [totalTouched, setTotalTouched] = useState(false);
+  const [hsaTouched, setHsaTouched] = useState(false);
   const [photoError, setPhotoError] = useState(null);
+
+  // Was the HSA open on a given expense date? ("YYYY-MM-DD" strings compare
+  // correctly lexicographically.) Without a profile date, default to open.
+  const hsaOpenFor = useCallback(
+    (expenseDate) =>
+      hsaEstablishedDate && expenseDate ? expenseDate >= hsaEstablishedDate : true,
+    [hsaEstablishedDate]
+  );
 
   // Load persisted receipts on mount.
   useEffect(() => {
@@ -165,6 +179,17 @@ export default function ReceiptVault({ storageAdapter, userId = "demo-user", pre
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.subtotal, form.discount, form.tax, totalTouched]);
 
+  // Auto-set "HSA was open" from the expense date vs. the profile's
+  // establishment date, until the user toggles the checkbox themselves.
+  useEffect(() => {
+    if (hsaTouched || !hsaEstablishedDate) return;
+    const open = hsaOpenFor(form.date);
+    if (open !== form.hsaOpenAtTime) {
+      setForm((f) => ({ ...f, hsaOpenAtTime: open }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.date, hsaTouched, hsaEstablishedDate]);
+
   // Deferred (reimbursable) balance: out-of-pocket, HSA-open-at-time, not yet reimbursed.
   const deferred = useMemo(
     () =>
@@ -183,6 +208,16 @@ export default function ReceiptVault({ storageAdapter, userId = "demo-user", pre
       receipts
         .filter((r) => r.status === "reimbursed")
         .reduce((sum, r) => sum + (Number(r.total) || 0), 0),
+    [receipts]
+  );
+  const excludedCount = useMemo(
+    () =>
+      receipts.filter(
+        (r) =>
+          r.paySource === "out-of-pocket" &&
+          !r.hsaOpenAtTime &&
+          r.status !== "reimbursed"
+      ).length,
     [receipts]
   );
 
@@ -210,14 +245,16 @@ export default function ReceiptVault({ storageAdapter, userId = "demo-user", pre
   }, []);
 
   function openAdd() {
-    setForm({ ...blankForm });
+    setForm({ ...blankForm, hsaOpenAtTime: hsaOpenFor(blankForm.date) });
     setEditingId(null);
     setTotalTouched(false);
+    setHsaTouched(false);
     setPhotoError(null);
     setShowForm(true);
   }
 
   function openEdit(r) {
+    setHsaTouched(true); // editing: keep the saved flag unless the user changes it
     setForm({
       ...blankForm,
       ...r,
@@ -306,6 +343,12 @@ export default function ReceiptVault({ storageAdapter, userId = "demo-user", pre
             There's no IRS deadline as long as your HSA was open when you paid
             <span className="text-stone-400"> (Notice 2004-50, Q&A 39)</span>.
           </p>
+          {excludedCount > 0 && (
+            <p className="mt-2 inline-flex rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-600/20">
+              {excludedCount} receipt{excludedCount > 1 ? "s" : ""} not counted —
+              marked as paid before your HSA was open. Edit a receipt to change that.
+            </p>
+          )}
         </div>
         <div className="grid grid-cols-3 divide-x divide-stone-100 text-center">
           <Stat label="Receipts" value={receipts.length} />
@@ -373,10 +416,13 @@ export default function ReceiptVault({ storageAdapter, userId = "demo-user", pre
             setShowForm(false);
             setEditingId(null);
             setTotalTouched(false);
+            setHsaTouched(false);
           }}
           onTotalTouched={() => setTotalTouched(true)}
+          onHsaTouched={() => setHsaTouched(true)}
           editing={Boolean(editingId)}
           photoError={photoError}
+          hsaEstablishedDate={hsaEstablishedDate}
         />
       )}
     </div>
@@ -424,6 +470,9 @@ function AttachmentBadge({ r }) {
 function ReceiptRow({ r, onToggle, onRemove, onEdit }) {
   const reimbursed = r.status === "reimbursed";
   const fromHsa = r.paySource === "hsa-card";
+  // Out-of-pocket but flagged "HSA wasn't open yet" → excluded from the
+  // reimbursable balance (IRS rule). Say so instead of silently not counting.
+  const excluded = !reimbursed && !fromHsa && !r.hsaOpenAtTime;
   return (
     <div className="flex items-center gap-4 rounded-2xl border border-stone-200 bg-white p-4 shadow-sm">
       <div className="grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-xl bg-stone-50 text-stone-400">
@@ -445,12 +494,19 @@ function ReceiptRow({ r, onToggle, onRemove, onEdit }) {
       <div className="text-right">
         <p className="font-display font-600 text-stone-950">{usd(r.total)}</p>
         <span
+          title={
+            excluded
+              ? "Marked as paid before your HSA was open, so it can't be reimbursed (IRS rule). Use Edit if that's wrong."
+              : undefined
+          }
           className={`mt-1 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${
             reimbursed
               ? "bg-stone-100 text-stone-500 ring-stone-200"
               : fromHsa
                 ? "bg-sky-50 text-sky-700 ring-sky-600/20"
-                : "bg-emerald-50 text-emerald-700 ring-emerald-600/20"
+                : excluded
+                  ? "bg-amber-50 text-amber-700 ring-amber-600/20"
+                  : "bg-emerald-50 text-emerald-700 ring-emerald-600/20"
           }`}
         >
           {reimbursed ? (
@@ -459,6 +515,8 @@ function ReceiptRow({ r, onToggle, onRemove, onEdit }) {
             </>
           ) : fromHsa ? (
             "Paid from HSA"
+          ) : excluded ? (
+            "Not counted — HSA not open"
           ) : (
             <>
               <ClockIcon className="h-3 w-3" /> Deferred
@@ -500,8 +558,10 @@ function CaptureForm({
   onSubmit,
   onClose,
   onTotalTouched,
+  onHsaTouched,
   editing,
   photoError,
+  hsaEstablishedDate,
 }) {
   const formPdf = isPdfAttachment(form);
   return (
@@ -661,11 +721,22 @@ function CaptureForm({
             <input
               type="checkbox"
               checked={form.hsaOpenAtTime}
-              onChange={(e) => setField("hsaOpenAtTime", e.target.checked)}
+              onChange={(e) => {
+                onHsaTouched();
+                setField("hsaOpenAtTime", e.target.checked);
+              }}
               className="h-4 w-4 rounded border-stone-300 text-candor-red focus:ring-candor-red"
             />
             My HSA was open when I paid this
           </label>
+          <p className="-mt-2 text-xs text-stone-400">
+            {hsaEstablishedDate
+              ? `Set automatically from your HSA start date (${hsaEstablishedDate}) and the expense date — override if needed. `
+              : ""}
+            If unchecked, this receipt won't count toward your reimbursable
+            balance — the IRS only allows reimbursement of expenses paid after
+            your HSA was opened.
+          </p>
 
           <Field label="Receipt photo or PDF (optional)">
             <input

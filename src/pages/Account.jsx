@@ -2,9 +2,10 @@
 // Signed out: sign in / create account / magic link. Signed in: account info + sign out.
 // Email/password + magic link only — no social logins, no custom SMTP (sprint guardrail).
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/AuthContext.jsx";
+import { loadProfile, saveHsaDate } from "../lib/profile.js";
 import { AccountIcon, CheckIcon } from "../components/icons.jsx";
 
 const inputCls =
@@ -80,6 +81,8 @@ function SignedIn() {
         Receipts now save to your account and sync across devices.
       </div>
 
+      <HsaDateField userId={user.id} />
+
       <button
         onClick={async () => {
           setBusy(true);
@@ -91,6 +94,63 @@ function SignedIn() {
       >
         {busy ? "Signing out…" : "Sign out"}
       </button>
+    </div>
+  );
+}
+
+/** View + edit the HSA establishment date (drives per-receipt eligibility flags). */
+function HsaDateField({ userId }) {
+  const [date, setDate] = useState("");
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    loadProfile().then((p) => setDate(p?.hsa_established_date ?? ""));
+  }, [userId]);
+
+  async function onSave() {
+    setBusy(true);
+    setError(null);
+    setSaved(false);
+    try {
+      await saveHsaDate(userId, date);
+      setSaved(true);
+    } catch {
+      setError("Couldn't save — try again in a moment.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-5 border-t border-stone-100 pt-5">
+      <p className="text-xs font-medium text-stone-500">HSA opened on</p>
+      <p className="mt-1 text-xs text-stone-400">
+        Used to automatically flag which receipts are reimbursable — the IRS only
+        allows reimbursing expenses paid after your HSA was established.
+      </p>
+      <div className="mt-2 flex items-center gap-2">
+        <input
+          type="date"
+          value={date}
+          max={new Date().toISOString().slice(0, 10)}
+          onChange={(e) => {
+            setDate(e.target.value);
+            setSaved(false);
+          }}
+          className="rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm text-stone-950 focus:border-stone-400 focus:outline-none focus:ring-2 focus:ring-stone-200"
+        />
+        <button
+          onClick={onSave}
+          disabled={busy || !date}
+          className="rounded-xl border border-stone-200 px-3.5 py-2 text-sm font-semibold text-stone-700 hover:bg-stone-50 disabled:opacity-50"
+        >
+          {busy ? "Saving…" : "Save"}
+        </button>
+        {saved && <CheckIcon className="h-4 w-4 text-emerald-600" />}
+      </div>
+      {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
     </div>
   );
 }
