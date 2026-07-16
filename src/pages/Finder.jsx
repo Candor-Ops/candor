@@ -10,7 +10,12 @@ import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/AuthContext.jsx";
 import { loadProfile } from "../lib/profile.js";
 import supabaseAdapter from "../lib/supabaseAdapter.js";
-import { findCandidates, HEURISTICS_VERSION } from "../lib/statementImport.js";
+import {
+  findCandidates,
+  candidatesFromTransactions,
+  HEURISTICS_VERSION,
+} from "../lib/statementImport.js";
+import { connectBank, fetchPlaidTransactions } from "../lib/plaid.js";
 import { ReceiptIcon, CheckIcon, SearchIcon } from "../components/icons.jsx";
 
 const usd = (n) =>
@@ -55,11 +60,7 @@ export default function Finder() {
     [existing]
   );
 
-  async function onFile(file) {
-    setError(null);
-    if (!file) return;
-    const text = await file.text();
-    const res = findCandidates(text, hsaDate);
+  function startReview(res) {
     if (res.error) {
       setError(res.error);
       return;
@@ -80,6 +81,29 @@ export default function Finder() {
     );
     setCategories({});
     setPhase("review");
+  }
+
+  async function onFile(file) {
+    setError(null);
+    if (!file) return;
+    const text = await file.text();
+    startReview(findCandidates(text, hsaDate));
+  }
+
+  const [connecting, setConnecting] = useState(false);
+  async function onConnectBank() {
+    setError(null);
+    setConnecting(true);
+    try {
+      const linked = await connectBank();
+      if (!linked) return; // user closed Link
+      const { transactions } = await fetchPlaidTransactions();
+      startReview(candidatesFromTransactions(transactions, hsaDate));
+    } catch (err) {
+      setError(err.message || "Bank connection failed. Try again shortly.");
+    } finally {
+      setConnecting(false);
+    }
   }
 
   function toggle(key) {
@@ -176,12 +200,26 @@ export default function Finder() {
               className="hidden"
               onChange={(e) => onFile(e.target.files?.[0])}
             />
-            <button
-              onClick={() => fileRef.current?.click()}
-              className="candor-gradient mt-4 rounded-xl px-5 py-2.5 text-sm font-semibold text-white shadow-sm"
-            >
-              Choose CSV file
-            </button>
+            <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
+              <button
+                onClick={() => fileRef.current?.click()}
+                className="candor-gradient rounded-xl px-5 py-2.5 text-sm font-semibold text-white shadow-sm"
+              >
+                Choose CSV file
+              </button>
+              <span className="text-xs text-stone-400">or</span>
+              <button
+                onClick={onConnectBank}
+                disabled={connecting}
+                className="rounded-xl border border-stone-200 px-5 py-2.5 text-sm font-semibold text-stone-700 hover:bg-stone-50 disabled:opacity-60"
+              >
+                {connecting ? "Connecting…" : "Connect a bank (sandbox)"}
+              </button>
+            </div>
+            <p className="mt-2 text-[11px] text-stone-400">
+              Bank connection is read-only via Plaid — Candor never moves your
+              money. Sandbox mode: test institutions only.
+            </p>
             {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
           </div>
         </div>

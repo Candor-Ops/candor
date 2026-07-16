@@ -4,6 +4,12 @@
   command = "npm run build"
   publish = "dist"
 
+# Serverless functions (Week 3+): Plaid integration — keeps Plaid secrets
+# server-side. Function routes (/.netlify/functions/*) take precedence over
+# the SPA redirect below.
+[functions]
+  directory = "netlify/functions"
+
 # Single-page-app fallback: every path serves index.html so React Router
 # can handle client-side routes (e.g. /store, /vault) on hard refresh / deep links.
 [[redirects]]

@@ -171,6 +171,56 @@ export function classifyDescription(description) {
 }
 
 /**
+ * Plaid transactions → candidate expenses (same shape as the CSV path).
+ * Positive amounts are money out (Plaid convention). Heuristics match on the
+ * merchant name; Plaid's own MEDICAL categorization backstops as medium
+ * confidence when our patterns miss.
+ */
+export function candidatesFromTransactions(transactions, hsaEstablishedDate = null) {
+  const candidates = [];
+  let skippedPreHsa = 0;
+  for (const t of transactions ?? []) {
+    if (t.pending) continue;
+    const amount = Number(t.amount);
+    if (!Number.isFinite(amount) || amount <= 0) continue; // outflows only
+    const date = normalizeDate(t.date);
+    const description = String(t.description ?? "").trim();
+    if (!date || !description) continue;
+
+    let match = classifyDescription(description);
+    if (!match && t.plaidCategory === "MEDICAL") {
+      match = {
+        category: "Other",
+        confidence: "medium",
+        reason: "Bank categorized as medical",
+      };
+    }
+    if (!match) continue;
+
+    if (hsaEstablishedDate && date < hsaEstablishedDate) {
+      skippedPreHsa++;
+      continue;
+    }
+
+    candidates.push({
+      key: `${date}|${description}|${amount}`,
+      date,
+      description: t.institution ? `${description} (${t.institution})` : description,
+      amount,
+      category: match.category,
+      confidence: match.confidence,
+      reason: match.reason,
+    });
+  }
+
+  const seen = new Set();
+  const deduped = candidates
+    .filter((c) => (seen.has(c.key) ? false : (seen.add(c.key), true)))
+    .sort((a, b) => (a.date < b.date ? 1 : -1));
+  return { candidates: deduped, skippedPreHsa, rowCount: (transactions ?? []).length, error: null };
+}
+
+/**
  * Full pipeline: CSV text → candidate expenses.
  *
  * @param {string} text                CSV file contents
