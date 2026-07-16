@@ -6,6 +6,7 @@ import Vault from "./pages/Vault.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import Tax from "./pages/Tax.jsx";
 import Account from "./pages/Account.jsx";
+import Finder from "./pages/Finder.jsx";
 import { RequireAuth } from "./lib/AuthContext.jsx";
 
 // `/` and `/store` stay public — they're the top-of-funnel.
@@ -38,6 +39,14 @@ export default function App() {
           element={
             <RequireAuth>
               <Tax />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/finder"
+          element={
+            <RequireAuth>
+              <Finder />
             </RequireAuth>
           }
         />

@@ -17,19 +17,24 @@ export async function loadProfile() {
 }
 
 /**
- * Upserts the HSA establishment date ("YYYY-MM-DD" or null to clear).
+ * Upserts arbitrary profile fields (snake_case column names).
  * Throws on failure so callers can show an error state.
  */
-export async function saveHsaDate(userId, date) {
+export async function saveProfileFields(userId, fields) {
   const { data, error } = await supabase
     .from("profiles")
     .upsert({
       user_id: userId,
-      hsa_established_date: date || null,
+      ...fields,
       updated_at: new Date().toISOString(),
     })
     .select()
     .maybeSingle();
   if (error) throw error;
   return data;
+}
+
+/** Upserts the HSA establishment date ("YYYY-MM-DD" or null to clear). */
+export async function saveHsaDate(userId, date) {
+  return saveProfileFields(userId, { hsa_established_date: date || null });
 }
