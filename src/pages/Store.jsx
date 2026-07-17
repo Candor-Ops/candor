@@ -1,7 +1,14 @@
 import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { CATALOG, CATEGORIES } from "../data/catalog.js";
 import EligBadge from "../components/EligBadge.jsx";
+import { resolveLmnProvider } from "../lib/lmnProviders.js";
 import { SearchIcon, CloseIcon, ShieldIcon, ArrowRight } from "../components/icons.jsx";
+
+const RECEIPT_CATEGORIES = [
+  "OTC", "Vision", "Dental", "Diagnostics", "First Aid",
+  "Family", "DPC", "Telehealth", "Recovery",
+];
 
 const usd = (n) =>
   (Number(n) || 0).toLocaleString("en-US", {
@@ -118,6 +125,25 @@ function ProductCard({ p, onOpen }) {
 }
 
 function ProductDetail({ p, onClose }) {
+  const navigate = useNavigate();
+  const lmn = p.kind === "lmn" ? resolveLmnProvider(p.category) : null;
+
+  // "The receipt files itself": simulated purchase routes to the vault with
+  // the capture form pre-filled. Real affiliate webhook attribution replaces
+  // this when an affiliate network is signed.
+  function fileReceipt() {
+    navigate("/vault", {
+      state: {
+        prefill: {
+          product: p.name,
+          merchant: p.merchant,
+          total: String(p.price),
+          category: RECEIPT_CATEGORIES.includes(p.category) ? p.category : "Other",
+        },
+      },
+    });
+  }
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-end justify-center bg-stone-950/40 p-0 sm:items-center sm:p-4"
@@ -175,18 +201,48 @@ function ProductDetail({ p, onClose }) {
           <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
             <strong className="font-semibold">Needs a Letter of Medical Necessity.</strong>{" "}
             This is a dual-use item — it qualifies only with an LMN tied to a diagnosed
-            condition. Guided LMN checkout is coming after launch.
+            condition, obtained <em>before</em> you buy.
+            {lmn?.provider && (
+              <a
+                href={lmn.provider.url}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-2 block font-semibold underline"
+              >
+                Get an LMN via {lmn.provider.name} →
+              </a>
+            )}
+            {lmn?.fallbacks?.length > 0 && (
+              <p className="mt-1 text-xs text-amber-700">
+                Also works with{" "}
+                {lmn.fallbacks.map((f, i) => (
+                  <span key={f.id}>
+                    {i > 0 && " · "}
+                    <a href={f.url} target="_blank" rel="noreferrer" className="underline">
+                      {f.name}
+                    </a>
+                  </span>
+                ))}
+              </p>
+            )}
           </div>
         )}
 
         <button
           onClick={() => {
-            /* MVP: affiliate link-out / simulated. Wired to real attribution in Week 3. */
+            /* MVP: affiliate link-out / simulated. Real attribution when an
+               affiliate network is signed. */
           }}
           className="candor-gradient mt-5 flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold text-white shadow-sm"
         >
           View at {p.merchant}
           <ArrowRight className="h-4 w-4" />
+        </button>
+        <button
+          onClick={fileReceipt}
+          className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl border border-stone-200 px-4 py-3 text-sm font-semibold text-stone-700 hover:bg-stone-50"
+        >
+          I bought this — file the receipt
         </button>
         <p className="mt-2 text-center text-xs text-stone-400">
           Affiliate link-out — Candor doesn't process payments or move HSA funds.

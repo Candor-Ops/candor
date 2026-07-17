@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import ReceiptVault from "../components/ReceiptVault.jsx";
 import supabaseAdapter from "../lib/supabaseAdapter.js";
 import { useAuth } from "../lib/AuthContext.jsx";
@@ -8,6 +8,8 @@ import { loadProfile, saveHsaDate } from "../lib/profile.js";
 // Route is wrapped in <RequireAuth> (App.jsx), so `user` is always present here.
 export default function Vault() {
   const { user } = useAuth();
+  // Storefront "I bought this" flow lands here with a pre-filled receipt.
+  const prefill = useLocation().state?.prefill;
   // undefined = loading, null = no profile row yet, object = loaded
   const [profile, setProfile] = useState(undefined);
 
@@ -54,6 +56,7 @@ export default function Vault() {
         storageAdapter={supabaseAdapter}
         userId={user.id}
         hsaEstablishedDate={hsaDate}
+        prefill={prefill}
       />
     </div>
   );

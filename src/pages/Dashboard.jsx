@@ -8,6 +8,7 @@ import { useAuth } from "../lib/AuthContext.jsx";
 import { loadProfile, saveProfileFields } from "../lib/profile.js";
 import supabaseAdapter from "../lib/supabaseAdapter.js";
 import { limitsFor } from "../data/hsaLimits.js";
+import { DPC_CAPS } from "../data/eligibilityRules.js";
 import { SearchIcon, ReceiptIcon } from "../components/icons.jsx";
 
 const usd = (n) =>
@@ -110,12 +111,33 @@ export default function Dashboard() {
         </Link>
       </section>
 
+      {/* ---- Advisor CTA ---- */}
+      <section className="mt-4 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
+        <div className="min-w-0">
+          <p className="font-display font-600 text-stone-950">
+            Not sure if something's eligible?
+          </p>
+          <p className="mt-1 max-w-prose text-sm text-stone-500">
+            Ask the advisor — every answer cited to the IRS rule it comes from.
+          </p>
+        </div>
+        <Link
+          to="/advisor"
+          className="shrink-0 rounded-xl border border-stone-200 px-4 py-2.5 text-sm font-semibold text-stone-700 hover:bg-stone-50"
+        >
+          Ask the advisor
+        </Link>
+      </section>
+
       {/* ---- Contributions vs. IRS limit ---- */}
       <ContributionTracker
         userId={user.id}
         profile={profile}
         onSaved={setProfile}
       />
+
+      {/* ---- DPC cap tracker (cliff enforcement) ---- */}
+      <DpcCapTracker receipts={receipts ?? []} profile={profile} />
 
       {/* ---- Empty-state nudge ---- */}
       {!loading && stats.count === 0 && (
@@ -140,6 +162,78 @@ function Stat({ label, value }) {
       <p className="font-display text-lg font-600 text-stone-950">{value}</p>
       <p className="text-xs text-stone-500">{label}</p>
     </div>
+  );
+}
+
+/**
+ * DPC cap tracker (PRD Feature 7). Reads this month's DPC-category receipts
+ * and enforces the OBBB cliff: exceed $150/mo (self) or $300/mo (family) and
+ * the ENTIRE arrangement is disqualifying for that month — not just the
+ * overage. Caps come from the rules engine, never hardcoded here.
+ */
+function DpcCapTracker({ receipts, profile }) {
+  const coverage = profile?.coverage_type === "family" ? "family" : "self";
+  const cap = coverage === "family" ? DPC_CAPS.familyMonthly : DPC_CAPS.selfMonthly;
+  const monthKey = new Date().toISOString().slice(0, 7); // YYYY-MM
+  const monthLabel = new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" });
+
+  const spent = useMemo(
+    () =>
+      receipts
+        .filter((r) => r.category === "DPC" && String(r.date).startsWith(monthKey))
+        .reduce((s, r) => s + (Number(r.total) || 0), 0),
+    [receipts, monthKey]
+  );
+
+  const pct = Math.min(100, Math.round((spent / cap) * 100));
+  const status = spent > cap ? "over" : spent >= cap * 0.8 ? "warn" : "ok";
+
+  return (
+    <section className="mt-4 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <p className="font-display font-600 text-stone-950">DPC cap tracker</p>
+        <p className="text-xs text-stone-400">
+          {monthLabel} · cap {usd(cap)}/mo ({coverage === "family" ? "family" : "self-only"}) ·{" "}
+          {DPC_CAPS.source}
+        </p>
+      </div>
+
+      <div className="mt-3 h-2 overflow-hidden rounded-full bg-stone-100">
+        <div
+          className={`h-full rounded-full ${
+            status === "over" ? "bg-red-500" : status === "warn" ? "bg-amber-500" : "bg-orange-400"
+          }`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+
+      {status === "over" ? (
+        <p className="mt-2 rounded-xl bg-red-50 px-3 py-2.5 text-sm text-red-700 ring-1 ring-inset ring-red-600/20">
+          <strong>{usd(spent)} — over the cap.</strong> The cap is a cliff: your entire
+          DPC arrangement is disqualifying for {monthLabel}, not just the overage.
+          Talk to your practice about fee structure before next month.
+        </p>
+      ) : status === "warn" ? (
+        <p className="mt-2 rounded-xl bg-amber-50 px-3 py-2.5 text-sm text-amber-800 ring-1 ring-inset ring-amber-600/20">
+          <strong>{usd(spent)} of {usd(cap)}</strong> — {usd(cap - spent)} from the cliff.
+          Exceeding the cap disqualifies the entire arrangement for the month.
+        </p>
+      ) : (
+        <p className="mt-2 text-xs text-stone-500">
+          {spent > 0 ? (
+            <>
+              {usd(spent)} of {usd(cap)} this month, from DPC-category receipts.
+            </>
+          ) : (
+            <>
+              No DPC fees logged this month. Tag membership receipts "DPC" and
+              they're tracked against the cap automatically.
+            </>
+          )}{" "}
+          Only fees YOU pay count — employer-paid DPC never qualifies (IRS Notice 2026-05).
+        </p>
+      )}
+    </section>
   );
 }
 

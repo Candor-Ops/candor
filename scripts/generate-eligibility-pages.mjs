@@ -15,6 +15,7 @@ import {
   RULES_LAST_VERIFIED,
   BUCKET_META,
 } from "../src/data/eligibilityRules.js";
+import { GUIDES } from "../src/data/guides.js";
 
 const SITE = "https://candorhsa.com";
 const outDir = process.argv[2] || "dist";
@@ -125,6 +126,58 @@ ${related.length ? `<div class="related"><h2>Related answers</h2><div class="chi
   return shell({ title, description: `${style.verdict}. ${rule.summary}`.slice(0, 155), canonical, jsonLd, body });
 }
 
+function guidePage(guide) {
+  const canonical = `${SITE}/guides/${guide.slug}/`;
+  const jsonLd = {
+    "@context": "https://schema.org",
+    "@type": "Article",
+    headline: guide.title,
+    description: guide.description,
+    dateModified: RULES_VERSION,
+    author: { "@type": "Organization", name: "Candor", url: SITE },
+  };
+  const body = `
+<h1>${esc(guide.title)}</h1>
+<p class="summary">${esc(guide.description)}</p>
+${guide.sections
+    .map(
+      (s) => `<div class="card"><h2 style="font-size:17px;text-transform:none;letter-spacing:0;color:#0c0a09;margin-bottom:8px">${esc(s.heading)}</h2>${s.paragraphs
+        .map((p) => `<p style="margin-top:8px">${esc(p)}</p>`)
+        .join("")}</div>`
+    )
+    .join("")}
+<div class="related"><h2>More guides</h2><div class="chips">${GUIDES.filter((g) => g.slug !== guide.slug)
+    .map((g) => `<a class="chip" href="${SITE}/guides/${g.slug}/">${esc(g.title)}</a>`)
+    .join("")}</div></div>
+<div class="cta">
+  <strong>Put it into practice</strong>
+  <p style="font-size:14px;color:#57534e;margin-top:4px">Candor vaults your receipts, tracks your Claimable Balance, and answers eligibility questions with IRS citations — free.</p>
+  <a class="btn" href="${SITE}/">Start your shoebox — free</a>
+</div>`;
+  return shell({ title: `${guide.title} | Candor`, description: guide.description.slice(0, 155), canonical, jsonLd, body });
+}
+
+function guidesIndexPage() {
+  const body = `
+<h1>HSA Guides</h1>
+<p class="summary">Plain-English guides to the rules that govern your HSA — every claim cited to the IRS source.</p>
+<ul class="items" style="margin-top:24px;gap:14px">${GUIDES.map(
+    (g) => `<li><a href="${SITE}/guides/${g.slug}/" style="font-weight:600">${esc(g.title)}</a><br><span style="font-size:13px;color:#78716c">${esc(g.description)}</span></li>`
+  ).join("")}</ul>
+<div class="cta">
+  <strong>Have a specific item in mind?</strong>
+  <p style="font-size:14px;color:#57534e;margin-top:4px">Search ${RULES.length} cited eligibility answers.</p>
+  <a class="btn" href="${SITE}/eligibility/">Browse the eligibility database</a>
+</div>`;
+  return shell({
+    title: "HSA Guides — rules, strategies, and mistakes to avoid | Candor",
+    description: "Plain-English HSA guides with IRS citations: 2026 rules, the shoebox reimbursement strategy, OBBB changes, LMNs, and costly mistakes.",
+    canonical: `${SITE}/guides/`,
+    jsonLd: null,
+    body,
+  });
+}
+
 function indexPage() {
   const cats = [...new Set(RULES.map((r) => r.category))];
   const dot = { A: "#059669", B: "#d97706", C: "#dc2626" };
@@ -140,9 +193,10 @@ ${cats
     .join("")}
 <div class="cta">
   <strong>Don't see your item?</strong>
-  <p style="font-size:14px;color:#57534e;margin-top:4px">Ask Candor's eligibility advisor inside the app — every answer grounded in these same rules.</p>
-  <a class="btn" href="${SITE}/">Open Candor — free</a>
-</div>`;
+  <p style="font-size:14px;color:#57534e;margin-top:4px">Ask Candor's eligibility advisor — every answer grounded in these same rules.</p>
+  <a class="btn" href="${SITE}/advisor">Ask the advisor — free</a>
+</div>
+<p style="margin-top:22px;font-size:14px"><a href="${SITE}/guides/" style="color:#57534e">Or read the HSA guides →</a></p>`;
   return shell({
     title: "Is it HSA-eligible? Every answer, with IRS citations | Candor",
     description: `${RULES.length} HSA eligibility answers with IRS citations — OTC meds, vision, dental, telehealth, DPC, fitness, and more. Last verified ${RULES_LAST_VERIFIED}.`,
@@ -157,6 +211,8 @@ function sitemap() {
     `${SITE}/`,
     `${SITE}/eligibility/`,
     ...RULES.map((r) => `${SITE}/eligibility/${r.slug}/`),
+    `${SITE}/guides/`,
+    ...GUIDES.map((g) => `${SITE}/guides/${g.slug}/`),
   ];
   return `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
@@ -180,12 +236,19 @@ async function main() {
     await writeFile(join(dir, "index.html"), itemPage(rule));
   }
   await writeFile(join(outDir, "eligibility", "index.html"), indexPage());
+  for (const guide of GUIDES) {
+    const dir = join(outDir, "guides", guide.slug);
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "index.html"), guidePage(guide));
+  }
+  await mkdir(join(outDir, "guides"), { recursive: true });
+  await writeFile(join(outDir, "guides", "index.html"), guidesIndexPage());
   await writeFile(join(outDir, "sitemap.xml"), sitemap());
   await writeFile(
     join(outDir, "robots.txt"),
     `User-agent: *\nAllow: /\nSitemap: ${SITE}/sitemap.xml\n`
   );
-  console.log(`✓ Generated ${RULES.length} eligibility pages + index + sitemap (rules ${RULES_VERSION})`);
+  console.log(`✓ Generated ${RULES.length} eligibility pages + ${GUIDES.length} guides + indexes + sitemap (rules ${RULES_VERSION})`);
 }
 
 main();

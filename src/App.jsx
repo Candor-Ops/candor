@@ -7,6 +7,7 @@ import Dashboard from "./pages/Dashboard.jsx";
 import Tax from "./pages/Tax.jsx";
 import Account from "./pages/Account.jsx";
 import Finder from "./pages/Finder.jsx";
+import Advisor from "./pages/Advisor.jsx";
 import { RequireAuth } from "./lib/AuthContext.jsx";
 
 // `/` and `/store` stay public — they're the top-of-funnel.
@@ -50,6 +51,8 @@ export default function App() {
             </RequireAuth>
           }
         />
+        {/* Public — advisor is top-of-funnel, like the store. */}
+        <Route path="/advisor" element={<Advisor />} />
         <Route path="/account" element={<Account />} />
         <Route path="*" element={<Landing />} />
       </Route>
