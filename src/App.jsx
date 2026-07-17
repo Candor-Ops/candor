@@ -8,6 +8,7 @@ import Tax from "./pages/Tax.jsx";
 import Account from "./pages/Account.jsx";
 import Finder from "./pages/Finder.jsx";
 import Advisor from "./pages/Advisor.jsx";
+import DpcShare from "./pages/DpcShare.jsx";
 import { RequireAuth } from "./lib/AuthContext.jsx";
 
 // `/` and `/store` stay public — they're the top-of-funnel.
@@ -53,6 +54,8 @@ export default function App() {
         />
         {/* Public — advisor is top-of-funnel, like the store. */}
         <Route path="/advisor" element={<Advisor />} />
+        {/* Public — DPC co-brand calculator (practice share links). */}
+        <Route path="/dpc" element={<DpcShare />} />
         <Route path="/account" element={<Account />} />
         <Route path="*" element={<Landing />} />
       </Route>

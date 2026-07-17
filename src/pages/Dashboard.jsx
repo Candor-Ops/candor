@@ -233,6 +233,13 @@ function DpcCapTracker({ receipts, profile }) {
           Only fees YOU pay count — employer-paid DPC never qualifies (IRS Notice 2026-05).
         </p>
       )}
+      <p className="mt-3 border-t border-stone-100 pt-3 text-xs text-stone-400">
+        In a DPC practice?{" "}
+        <a href="/dpc" className="underline hover:text-stone-600">
+          There's a shareable version of this calculator
+        </a>{" "}
+        your physician can co-brand (<code>/dpc?practice=Name&ref=code</code>).
+      </p>
     </section>
   );
 }

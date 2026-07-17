@@ -83,6 +83,8 @@ function SignedIn() {
 
       <HsaDateField userId={user.id} />
 
+      <DataControls />
+
       <button
         onClick={async () => {
           setBusy(true);
@@ -94,6 +96,121 @@ function SignedIn() {
       >
         {busy ? "Signing out…" : "Sign out"}
       </button>
+    </div>
+  );
+}
+
+/**
+ * Data export + delete, self-serve (trust covenant: no data hostage-taking).
+ * Export = full JSON of receipts + profile. Delete = wipes receipts, photos,
+ * bank links, and profile via RLS-scoped deletes, then signs out.
+ */
+function DataControls() {
+  const { user, signOut } = useAuth();
+  const [confirming, setConfirming] = useState(false);
+  const [confirmText, setConfirmText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function exportData() {
+    setBusy(true);
+    setError(null);
+    try {
+      const { default: supabaseAdapter } = await import("../lib/supabaseAdapter.js");
+      const { loadProfile } = await import("../lib/profile.js");
+      const [receipts, profile] = await Promise.all([
+        supabaseAdapter.load(user.id),
+        loadProfile(),
+      ]);
+      const payload = {
+        exportedAt: new Date().toISOString(),
+        account: { id: user.id, email: user.email },
+        profile,
+        receipts,
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `candor-export-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      setError("Export failed — try again in a moment.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteEverything() {
+    if (confirmText !== "DELETE") return;
+    setBusy(true);
+    setError(null);
+    try {
+      const { supabase } = await import("../lib/supabaseClient.js");
+      const { default: supabaseAdapter } = await import("../lib/supabaseAdapter.js");
+      // Wipes receipts + their photos via the adapter's reconcile path.
+      await supabaseAdapter.load(user.id);
+      await supabaseAdapter.save(user.id, []);
+      await supabase.from("plaid_items").delete().eq("user_id", user.id);
+      await supabase.from("profiles").delete().eq("user_id", user.id);
+      await signOut();
+    } catch {
+      setError("Deletion hit a snag — try again, or contact support.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-5 border-t border-stone-100 pt-5">
+      <p className="text-xs font-medium text-stone-500">Your data</p>
+      <p className="mt-1 text-xs text-stone-400">
+        Export everything anytime, or erase it all. No hostage-taking — trust
+        is the product.
+      </p>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <button
+          onClick={exportData}
+          disabled={busy}
+          className="rounded-xl border border-stone-200 px-3.5 py-2 text-sm font-semibold text-stone-700 hover:bg-stone-50 disabled:opacity-50"
+        >
+          Export all my data (JSON)
+        </button>
+        {!confirming ? (
+          <button
+            onClick={() => setConfirming(true)}
+            className="rounded-xl border border-red-200 px-3.5 py-2 text-sm font-semibold text-red-600 hover:bg-red-50"
+          >
+            Delete my data
+          </button>
+        ) : (
+          <span className="flex items-center gap-2">
+            <input
+              value={confirmText}
+              onChange={(e) => setConfirmText(e.target.value)}
+              placeholder='Type "DELETE"'
+              className="w-32 rounded-xl border border-red-200 px-3 py-2 text-sm"
+            />
+            <button
+              onClick={deleteEverything}
+              disabled={busy || confirmText !== "DELETE"}
+              className="rounded-xl bg-red-600 px-3.5 py-2 text-sm font-semibold text-white disabled:opacity-40"
+            >
+              {busy ? "Erasing…" : "Erase everything"}
+            </button>
+          </span>
+        )}
+      </div>
+      {confirming && (
+        <p className="mt-2 text-xs text-red-600">
+          Permanently erases all receipts, photos, bank links, and settings,
+          then signs you out. Your sign-in email remains until you ask us to
+          remove it entirely. This cannot be undone.
+        </p>
+      )}
+      {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
     </div>
   );
 }
