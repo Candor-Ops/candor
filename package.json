@@ -6,7 +6,7 @@
   "description": "Candor — verified HSA storefront, receipt vault, and shoebox deferred-reimbursement tracker (candorhsa.com).",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && node scripts/generate-eligibility-pages.mjs",
     "preview": "vite preview",
     "lint": "eslint ."
   },
