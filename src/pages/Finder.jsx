@@ -91,16 +91,45 @@ export default function Finder() {
   }
 
   const [connecting, setConnecting] = useState(false);
+
+  // Plaid's transactions product can take a few seconds to initialize after
+  // linking — retry a couple of times before concluding there's nothing.
+  async function pullTransactions() {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const { transactions } = await fetchPlaidTransactions();
+      if (transactions.length) return transactions;
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+    return [];
+  }
+
   async function onConnectBank() {
     setError(null);
     setConnecting(true);
     try {
       const linked = await connectBank();
       if (!linked) return; // user closed Link
-      const { transactions } = await fetchPlaidTransactions();
+      const transactions = await pullTransactions();
       startReview(candidatesFromTransactions(transactions, hsaDate));
     } catch (err) {
       setError(err.message || "Bank connection failed. Try again shortly.");
+    } finally {
+      setConnecting(false);
+    }
+  }
+
+  async function onRescan() {
+    setError(null);
+    setConnecting(true);
+    try {
+      const transactions = await pullTransactions();
+      if (!transactions.length) {
+        setError("No transactions found on your linked banks yet — connect one first, or wait a moment and rescan.");
+        return;
+      }
+      startReview(candidatesFromTransactions(transactions, hsaDate));
+    } catch (err) {
+      setError(err.message || "Rescan failed. Try again shortly.");
     } finally {
       setConnecting(false);
     }
@@ -213,7 +242,14 @@ export default function Finder() {
                 disabled={connecting}
                 className="rounded-xl border border-stone-200 px-5 py-2.5 text-sm font-semibold text-stone-700 hover:bg-stone-50 disabled:opacity-60"
               >
-                {connecting ? "Connecting…" : "Connect a bank (sandbox)"}
+                {connecting ? "Working…" : "Connect a bank (sandbox)"}
+              </button>
+              <button
+                onClick={onRescan}
+                disabled={connecting}
+                className="text-xs font-medium text-stone-500 underline hover:text-stone-700 disabled:opacity-60"
+              >
+                Rescan already-linked banks
               </button>
             </div>
             <p className="mt-2 text-[11px] text-stone-400">
