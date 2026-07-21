@@ -34,6 +34,10 @@ export const SearchIcon = (p) => (
   <svg {...base} {...p}><circle cx="11" cy="11" r="7" /><path d="m20 20-3.2-3.2" /></svg>
 );
 
+export const AdvisorIcon = (p) => (
+  <svg {...base} {...p}><path d="M21 11.5a8 8 0 0 1-11.6 7.2L4 20l1.3-5.4A8 8 0 1 1 21 11.5Z" /><path d="M9 10h6" /><path d="M9 13.5h4" /></svg>
+);
+
 export const CheckIcon = (p) => (
   <svg {...base} {...p}><path d="M20 6 9 17l-5-5" /></svg>
 );

@@ -148,6 +148,18 @@ export default function Advisor() {
                 </button>
               ))}
             </div>
+            <a
+              href="/eligibility/"
+              className="mt-4 block rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm text-stone-600 hover:border-stone-300"
+            >
+              <span className="font-semibold text-stone-950">
+                Prefer to browse? Open the full eligibility database →
+              </span>
+              <span className="mt-0.5 block text-xs text-stone-500">
+                Every answer with its IRS citation, last verified July 2026 —
+                the same rules this advisor runs on.
+              </span>
+            </a>
           </div>
         )}
 

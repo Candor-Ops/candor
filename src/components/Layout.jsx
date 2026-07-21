@@ -5,6 +5,7 @@ import {
   DashboardIcon,
   TaxIcon,
   AccountIcon,
+  AdvisorIcon,
   CheckIcon,
 } from "./icons.jsx";
 import { useAuth } from "../lib/AuthContext.jsx";
@@ -26,6 +27,7 @@ export function Wordmark({ className = "" }) {
 const TABS = [
   { to: "/store", label: "Store", Icon: StoreIcon },
   { to: "/vault", label: "Vault", Icon: VaultIcon },
+  { to: "/advisor", label: "Advisor", Icon: AdvisorIcon },
   { to: "/dashboard", label: "Dashboard", Icon: DashboardIcon },
   { to: "/tax", label: "Tax", Icon: TaxIcon },
   { to: "/account", label: "Account", Icon: AccountIcon },
@@ -97,6 +99,70 @@ export default function Layout() {
       {/* ---- Routed page ---- */}
       <main className="pb-24 md:pb-0">
         <Outlet />
+
+        {/* ---- Site footer: the Eligibility Intelligence reference, in the open ---- */}
+        <footer className="mt-16 border-t border-stone-200/70 bg-stone-50/50">
+          <div className="mx-auto grid max-w-6xl gap-8 px-4 py-10 sm:grid-cols-3 sm:px-6">
+            <div>
+              <Wordmark />
+              <p className="mt-3 max-w-xs text-sm text-stone-500">
+                The consumer system of record for your HSA. No ads. Your data is
+                never sold or shared — export or erase it anytime.
+              </p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-stone-400">
+                Eligibility intelligence
+              </p>
+              <ul className="mt-3 space-y-2 text-sm">
+                <li>
+                  {/* Static pages — full page loads, not SPA routes */}
+                  <a href="/eligibility/" className="text-stone-600 hover:text-stone-950">
+                    Eligibility database — every answer, with IRS citations
+                  </a>
+                </li>
+                <li>
+                  <a href="/guides/" className="text-stone-600 hover:text-stone-950">
+                    HSA guides — rules, strategy, mistakes
+                  </a>
+                </li>
+                <li>
+                  <NavLink to="/advisor" className="text-stone-600 hover:text-stone-950">
+                    Ask the eligibility advisor
+                  </NavLink>
+                </li>
+              </ul>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-stone-400">
+                Tools
+              </p>
+              <ul className="mt-3 space-y-2 text-sm">
+                <li>
+                  <NavLink to="/finder" className="text-stone-600 hover:text-stone-950">
+                    Retroactive expense finder
+                  </NavLink>
+                </li>
+                <li>
+                  <NavLink to="/dpc" className="text-stone-600 hover:text-stone-950">
+                    DPC cap calculator
+                  </NavLink>
+                </li>
+                <li>
+                  <NavLink to="/tax" className="text-stone-600 hover:text-stone-950">
+                    Form 8889 tax export
+                  </NavLink>
+                </li>
+              </ul>
+            </div>
+          </div>
+          <div className="border-t border-stone-200/70 px-4 py-4">
+            <p className="mx-auto max-w-6xl text-xs text-stone-400 sm:px-2">
+              Informational only — not tax, legal, or investment advice. Candor
+              never moves HSA funds.
+            </p>
+          </div>
+        </footer>
       </main>
 
       {/* ---- Mobile bottom tab bar ---- */}
@@ -104,7 +170,7 @@ export default function Layout() {
         className="fixed inset-x-0 bottom-0 z-40 border-t border-stone-200 bg-white/95 backdrop-blur md:hidden"
         aria-label="Primary"
       >
-        <div className="mx-auto grid max-w-md grid-cols-5">
+        <div className="mx-auto grid max-w-md grid-cols-6">
           {TABS.map(({ to, label, Icon }) => (
             <NavLink
               key={to}
